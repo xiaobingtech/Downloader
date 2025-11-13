@@ -86,9 +86,15 @@ struct DownloadTaskRow: View {
                     .progressViewStyle(LinearProgressViewStyle())
                 
                 HStack {
-                    Text(task.formattedProgress)
-                        .font(.caption)
-                        .foregroundColor(.secondary)
+                    if task.downloadType == .m3u8 {
+                        Text(task.formattedSegments)
+                            .font(.caption)
+                            .foregroundColor(.secondary)
+                    } else {
+                        Text(task.formattedProgress)
+                            .font(.caption)
+                            .foregroundColor(.secondary)
+                    }
                     
                     Spacer()
                     

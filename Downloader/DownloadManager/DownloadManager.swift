@@ -132,30 +132,117 @@ class DownloadManager: NSObject, ObservableObject {
     }
     
     private func startM3U8Download(task: DownloadTask) {
-        guard let url = URL(string: task.url) else { return }
+        guard let playlistURL = URL(string: task.url) else { return }
         
-        let asset = AVURLAsset(url: url)
-        let downloadSession = AVAssetDownloadURLSession(
-            configuration: .background(withIdentifier: "com.xiaobing.Downloader.m3u8"),
-            assetDownloadDelegate: M3U8DownloadDelegate(task: task, manager: self),
-            delegateQueue: OperationQueue.main
-        )
-        
-        guard let downloadTask = downloadSession.makeAssetDownloadTask(
-            asset: asset,
-            assetTitle: task.fileName,
-            assetArtworkData: nil,
-            options: nil
-        ) else {
-            task.status = .failed
-            return
-        }
-        
-        m3u8Sessions[task.id] = downloadTask
-        downloadTask.resume()
-        
-        // 对于m3u8，使用简化的进度监控
+        // 开始速度监控（基于字节累计）
         startM3U8ProgressMonitoring(task: task)
+        
+        // 解析分片并下载 -> 合并TS -> 转码MP4 -> 清理
+        parseM3U8(playlistURL: playlistURL) { [weak self] result in
+            guard let self = self else { return }
+            switch result {
+            case .failure:
+                DispatchQueue.main.async {
+                    task.status = .failed
+                    self.saveAllTasks()
+                }
+            case .success(let segmentURLs):
+                DispatchQueue.main.async {
+                    task.totalSegments = segmentURLs.count
+                    task.progress = 0
+                    task.downloadedSegments = 0
+                    task.status = .downloading
+                }
+                self.downloadSegments(segmentURLs: segmentURLs, for: task) { tempFilesResult in
+                    switch tempFilesResult {
+                    case .failure:
+                        DispatchQueue.main.async {
+                            task.status = .failed
+                            self.speedTimers[task.id]?.invalidate()
+                            self.saveAllTasks()
+                        }
+                    case .success(let tempFiles):
+                        // 合并 TS
+                        let mergedTS = self.documentsPath.appendingPathComponent("\(task.fileName)_merged.ts")
+                        do {
+                            try self.mergeTSFiles(inOrder: tempFiles, to: mergedTS)
+                        } catch {
+                            DispatchQueue.main.async {
+                                task.status = .failed
+                                self.speedTimers[task.id]?.invalidate()
+                                self.saveAllTasks()
+                            }
+                            // 清理分片
+                            tempFiles.forEach { try? FileManager.default.removeItem(at: $0) }
+                            return
+                        }
+                        // 清理分片
+                        tempFiles.forEach { try? FileManager.default.removeItem(at: $0) }
+                        
+                        // 转码 MP4
+                        let outputMP4 = self.documentsPath.appendingPathComponent(task.displayFileName)
+                        self.exportTSAsMP4(inputTS: mergedTS, outputMP4: outputMP4) { exportResult in
+                            switch exportResult {
+                            case .failure:
+                                // 转码失败时降级为直接产出合并后的 TS 文件
+                                do {
+                                    let tsDestination = self.documentsPath.appendingPathComponent("\(task.fileName).ts")
+                                    if FileManager.default.fileExists(atPath: tsDestination.path) {
+                                        try FileManager.default.removeItem(at: tsDestination)
+                                    }
+                                    try FileManager.default.moveItem(at: mergedTS, to: tsDestination)
+                                    
+                                    DispatchQueue.main.async {
+                                        task.filePath = tsDestination
+                                        task.status = .completed
+                                        task.progress = 1.0
+                                        if let total = task.totalSegments {
+                                            task.downloadedSegments = total
+                                        }
+                                        
+                                        self.downloadingTasks.removeAll { $0.id == task.id }
+                                        self.completedTasks.append(task)
+                                        
+                                        self.m3u8Sessions.removeValue(forKey: task.id)
+                                        self.speedTimers[task.id]?.invalidate()
+                                        self.speedTimers.removeValue(forKey: task.id)
+                                        
+                                        self.saveAllTasks()
+                                    }
+                                } catch {
+                                    DispatchQueue.main.async {
+                                        task.status = .failed
+                                        self.speedTimers[task.id]?.invalidate()
+                                        self.saveAllTasks()
+                                    }
+                                }
+                            case .success:
+                                // 删除合并后的 TS
+                                try? FileManager.default.removeItem(at: mergedTS)
+                                
+                                DispatchQueue.main.async {
+                                    task.filePath = outputMP4
+                                    task.status = .completed
+                                    task.progress = 1.0
+                                    if let total = task.totalSegments {
+                                        task.downloadedSegments = total
+                                    }
+                                    
+                                    self.downloadingTasks.removeAll { $0.id == task.id }
+                                    self.completedTasks.append(task)
+                                    
+                                    self.m3u8Sessions.removeValue(forKey: task.id)
+                                    self.speedTimers[task.id]?.invalidate()
+                                    self.speedTimers.removeValue(forKey: task.id)
+                                    
+                                    self.saveAllTasks()
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
     }
     
     private func startSpeedMonitoring(task: DownloadTask) {
@@ -188,8 +275,8 @@ class DownloadManager: NSObject, ObservableObject {
     }
     
     private func startM3U8ProgressMonitoring(task: DownloadTask) {
-        // M3U8下载进度由AVAssetDownloadDelegate的didWriteData方法更新
-        // 这里只需要监控下载速度
+        // M3U8下载进度由AVAssetDownloadDelegate的didWriteData方法更新（字节级）
+        // 这里通过定时器计算网速，并根据progress与分片总数估算已下载分片数
         lastUpdateTime[task.id] = Date()
         lastDownloadedBytes[task.id] = task.downloadedBytes
         
@@ -211,6 +298,10 @@ class DownloadManager: NSObject, ObservableObject {
                 
                 DispatchQueue.main.async {
                     task.downloadSpeed = speed
+                    if let total = task.totalSegments, total > 0 {
+                        let estimated = Int(max(0, min(Double(total), round(task.progress * Double(total)))))
+                        task.downloadedSegments = estimated
+                    }
                 }
             }
             
@@ -220,6 +311,207 @@ class DownloadManager: NSObject, ObservableObject {
         
         speedTimers[task.id] = timer
         RunLoop.current.add(timer, forMode: .common)
+    }
+    
+    private func fetchM3U8SegmentCount(from url: URL, completion: @escaping (Int?) -> Void) {
+        // 简单解析：下载m3u8文本，统计#EXTINF行数作为分片数
+        let task = URLSession.shared.dataTask(with: url) { data, response, error in
+            guard error == nil, let data = data, let text = String(data: data, encoding: .utf8) else {
+                completion(nil)
+                return
+            }
+            // 过滤注释与空行，统计媒体分片行（常见为#EXTINF后跟URI的下一行，但仅用#EXTINF计数更稳妥）
+            let lines = text.split(whereSeparator: \.isNewline)
+            let total = lines.filter { $0.trimmingCharacters(in: .whitespacesAndNewlines).hasPrefix("#EXTINF") }.count
+            completion(total > 0 ? total : nil)
+        }
+        task.resume()
+    }
+    
+    private func parseM3U8(playlistURL: URL, completion: @escaping (Result<[URL], Error>) -> Void) {
+        URLSession.shared.dataTask(with: playlistURL) { data, _, error in
+            if let error = error {
+                completion(.failure(error))
+                return
+            }
+            guard let data = data, let text = String(data: data, encoding: .utf8) else {
+                completion(.failure(NSError(domain: "m3u8.parse", code: -1)))
+                return
+            }
+            let baseURL = playlistURL.deletingLastPathComponent()
+            var segmentURLs: [URL] = []
+            var variantCandidates: [(url: URL, bandwidth: Int?)] = []
+            var pendingVariantInfo: String?
+            var foundVariantPlaylist = false
+            
+            let lines = text.components(separatedBy: .newlines)
+            for rawLine in lines {
+                let line = rawLine.trimmingCharacters(in: .whitespacesAndNewlines)
+                guard !line.isEmpty else { continue }
+                
+                if line.hasPrefix("#EXT-X-STREAM-INF") {
+                    foundVariantPlaylist = true
+                    pendingVariantInfo = line
+                    continue
+                }
+                
+                if line.hasPrefix("#") {
+                    continue
+                }
+                
+                let resolvedURL: URL
+                if let absoluteURL = URL(string: line), absoluteURL.scheme != nil {
+                    resolvedURL = absoluteURL
+                } else if let relativeURL = URL(string: line, relativeTo: baseURL)?.absoluteURL {
+                    resolvedURL = relativeURL
+                } else {
+                    continue
+                }
+                
+                if let infoLine = pendingVariantInfo {
+                    let bandwidth = Self.parseBandwidth(from: infoLine)
+                    variantCandidates.append((url: resolvedURL, bandwidth: bandwidth))
+                    pendingVariantInfo = nil
+                } else {
+                    segmentURLs.append(resolvedURL)
+                }
+            }
+            
+            if foundVariantPlaylist {
+                guard !variantCandidates.isEmpty else {
+                    completion(.failure(NSError(domain: "m3u8.master.empty", code: -4)))
+                    return
+                }
+                let selectedVariant = variantCandidates.max { (lhs, rhs) -> Bool in
+                    let leftBandwidth = lhs.bandwidth ?? 0
+                    let rightBandwidth = rhs.bandwidth ?? 0
+                    return leftBandwidth < rightBandwidth
+                }?.url ?? variantCandidates[0].url
+                
+                self.parseM3U8(playlistURL: selectedVariant, completion: completion)
+                return
+            }
+            
+            if segmentURLs.isEmpty {
+                completion(.failure(NSError(domain: "m3u8.empty", code: -2)))
+            } else {
+                completion(.success(segmentURLs))
+            }
+        }.resume()
+    }
+    
+    private static func parseBandwidth(from streamInfoLine: String) -> Int? {
+        let components = streamInfoLine
+            .replacingOccurrences(of: "#EXT-X-STREAM-INF:", with: "")
+            .split(separator: ",")
+        for component in components {
+            let trimmed = component.trimmingCharacters(in: .whitespacesAndNewlines)
+            if trimmed.uppercased().hasPrefix("BANDWIDTH=") {
+                let valuePart = trimmed.dropFirst("BANDWIDTH=".count)
+                return Int(valuePart)
+            }
+        }
+        return nil
+    }
+    
+    private func downloadSegments(segmentURLs: [URL], for task: DownloadTask, completion: @escaping (Result<[URL], Error>) -> Void) {
+        // 简化实现：顺序下载，避免同时大量连接；可按需优化并发
+        let tempDir = FileManager.default.temporaryDirectory.appendingPathComponent("m3u8_\(task.id.uuidString)")
+        try? FileManager.default.createDirectory(at: tempDir, withIntermediateDirectories: true)
+        
+        var tempFiles: [URL] = []
+        var currentIndex = 0
+        var accumulatedBytes: Int64 = 0
+        
+        func downloadNext() {
+            if currentIndex >= segmentURLs.count {
+                completion(.success(tempFiles))
+                return
+            }
+            let url = segmentURLs[currentIndex]
+            let fileURL = tempDir.appendingPathComponent(String(format: "%08d.ts", currentIndex))
+            let taskRequest = URLRequest(url: url)
+            let dataTask = URLSession.shared.downloadTask(with: taskRequest) { [weak self] location, _, error in
+                guard let self = self else { return }
+                if let error = error {
+                    completion(.failure(error))
+                    return
+                }
+                guard let location = location else {
+                    completion(.failure(NSError(domain: "m3u8.download", code: -3)))
+                    return
+                }
+                do {
+                    if FileManager.default.fileExists(atPath: fileURL.path) {
+                        try FileManager.default.removeItem(at: fileURL)
+                    }
+                    try FileManager.default.moveItem(at: location, to: fileURL)
+                    tempFiles.append(fileURL)
+                    
+                    // 更新进度
+                    let fileSize = (try? FileManager.default.attributesOfItem(atPath: fileURL.path)[.size] as? NSNumber)?.int64Value ?? 0
+                    accumulatedBytes += fileSize
+                    DispatchQueue.main.async {
+                        task.downloadedSegments = tempFiles.count
+                        task.progress = Double(tempFiles.count) / Double(segmentURLs.count)
+                        task.downloadedBytes = accumulatedBytes
+                        task.totalBytes = nil
+                    }
+                    
+                    currentIndex += 1
+                    downloadNext()
+                } catch {
+                    completion(.failure(error))
+                }
+            }
+            dataTask.resume()
+        }
+        
+        downloadNext()
+    }
+    
+    private func mergeTSFiles(inOrder urls: [URL], to output: URL) throws {
+        if FileManager.default.fileExists(atPath: output.path) {
+            try FileManager.default.removeItem(at: output)
+        }
+        FileManager.default.createFile(atPath: output.path, contents: nil, attributes: nil)
+        guard let outHandle = try? FileHandle(forWritingTo: output) else {
+            throw NSError(domain: "ts.merge", code: -10)
+        }
+        defer { try? outHandle.close() }
+        for url in urls {
+            guard let inHandle = try? FileHandle(forReadingFrom: url) else {
+                throw NSError(domain: "ts.merge.read", code: -11)
+            }
+            let data = try inHandle.readToEnd() ?? Data()
+            try? inHandle.close()
+            try outHandle.seekToEnd()
+            try outHandle.write(contentsOf: data)
+        }
+    }
+    
+    private func exportTSAsMP4(inputTS: URL, outputMP4: URL, completion: @escaping (Result<Void, Error>) -> Void) {
+        if FileManager.default.fileExists(atPath: outputMP4.path) {
+            try? FileManager.default.removeItem(at: outputMP4)
+        }
+        let asset = AVURLAsset(url: inputTS)
+        guard let exporter = AVAssetExportSession(asset: asset, presetName: AVAssetExportPresetHighestQuality) else {
+            completion(.failure(NSError(domain: "av.exporter.nil", code: -20)))
+            return
+        }
+        exporter.outputURL = outputMP4
+        exporter.outputFileType = .mp4
+        exporter.shouldOptimizeForNetworkUse = true
+        exporter.exportAsynchronously {
+            switch exporter.status {
+            case .completed:
+                completion(.success(()))
+            case .failed, .cancelled:
+                completion(.failure(exporter.error ?? NSError(domain: "av.exporter.failed", code: -21)))
+            default:
+                completion(.failure(NSError(domain: "av.exporter.unknown", code: -22)))
+            }
+        }
     }
     
     private func moveFile(from sourceURL: URL, to task: DownloadTask) {
@@ -279,6 +571,12 @@ class DownloadManager: NSObject, ObservableObject {
                 task.filePath = destinationURL
                 task.status = .completed
                 task.progress = 1.0
+                if let total = task.totalSegments {
+                    task.downloadedSegments = total
+                }
+                if let total = task.totalSegments {
+                    task.downloadedSegments = total
+                }
                 
                 self.downloadingTasks.removeAll { $0.id == task.id }
                 self.completedTasks.append(task)
@@ -295,6 +593,9 @@ class DownloadManager: NSObject, ObservableObject {
                 task.filePath = fileURL
                 task.status = .completed
                 task.progress = 1.0
+                if let total = task.totalSegments {
+                    task.downloadedSegments = total
+                }
                 
                 self.downloadingTasks.removeAll { $0.id == task.id }
                 self.completedTasks.append(task)

@@ -30,6 +30,8 @@ class DownloadTask: ObservableObject, Identifiable {
     @Published var downloadSpeed: Double // bytes per second
     @Published var downloadedBytes: Int64
     @Published var totalBytes: Int64?
+    @Published var totalSegments: Int?
+    @Published var downloadedSegments: Int
     
     var filePath: URL? // 下载完成后的文件路径
     
@@ -44,6 +46,8 @@ class DownloadTask: ObservableObject, Identifiable {
         self.downloadedBytes = 0
         self.totalBytes = nil
         self.filePath = nil
+        self.totalSegments = nil
+        self.downloadedSegments = 0
     }
     
     var displayFileName: String {
@@ -64,6 +68,14 @@ class DownloadTask: ObservableObject, Identifiable {
     var formattedProgress: String {
         return String(format: "%.1f%%", progress * 100)
     }
+    
+    var formattedSegments: String {
+        if let total = totalSegments, total > 0 {
+            return "\(downloadedSegments)/\(total)"
+        } else {
+            return "--/--"
+        }
+    }
 }
 
 struct DownloadTaskSnapshot: Codable {
@@ -76,6 +88,8 @@ struct DownloadTaskSnapshot: Codable {
     let downloadedBytes: Int64
     let totalBytes: Int64?
     let filePath: String?
+    let totalSegments: Int?
+    let downloadedSegments: Int
 }
 
 extension DownloadTask {
@@ -90,6 +104,8 @@ extension DownloadTask {
             self.filePath = nil
         }
         downloadSpeed = 0.0
+        totalSegments = snapshot.totalSegments
+        downloadedSegments = snapshot.downloadedSegments
     }
     
     func makeSnapshot() -> DownloadTaskSnapshot {
@@ -102,7 +118,9 @@ extension DownloadTask {
             progress: progress,
             downloadedBytes: downloadedBytes,
             totalBytes: totalBytes,
-            filePath: filePath?.path
+            filePath: filePath?.path,
+            totalSegments: totalSegments,
+            downloadedSegments: downloadedSegments
         )
     }
 }
