@@ -495,13 +495,13 @@ class DownloadManager: NSObject, ObservableObject {
             try? FileManager.default.removeItem(at: outputMP4)
         }
         let asset = AVURLAsset(url: inputTS)
-        guard let exporter = AVAssetExportSession(asset: asset, presetName: AVAssetExportPresetHighestQuality) else {
+        guard let exporter = AVAssetExportSession(asset: asset, presetName: AVAssetExportPresetPassthrough) else {
             completion(.failure(NSError(domain: "av.exporter.nil", code: -20)))
             return
         }
         exporter.outputURL = outputMP4
         exporter.outputFileType = .mp4
-        exporter.shouldOptimizeForNetworkUse = true
+//        exporter.shouldOptimizeForNetworkUse = true
         exporter.exportAsynchronously {
             switch exporter.status {
             case .completed:

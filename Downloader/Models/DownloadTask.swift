@@ -51,7 +51,7 @@ class DownloadTask: ObservableObject, Identifiable {
     }
     
     var displayFileName: String {
-        let fileExtension = downloadType == .m3u8 ? "ts" : (URL(string: url)?.pathExtension ?? "")
+        let fileExtension = downloadType == .m3u8 ? "mp4" : (URL(string: url)?.pathExtension ?? "")
         return "\(fileName).\(fileExtension)"
     }
     
