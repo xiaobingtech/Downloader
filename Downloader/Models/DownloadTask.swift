@@ -8,14 +8,14 @@
 import Foundation
 import Combine
 
-enum DownloadStatus {
+enum DownloadStatus: String, Codable {
     case downloading
     case paused
     case completed
     case failed
 }
 
-enum DownloadType {
+enum DownloadType: String, Codable {
     case directLink
     case m3u8
 }
@@ -63,6 +63,47 @@ class DownloadTask: ObservableObject, Identifiable {
     
     var formattedProgress: String {
         return String(format: "%.1f%%", progress * 100)
+    }
+}
+
+struct DownloadTaskSnapshot: Codable {
+    let id: UUID
+    let url: String
+    let fileName: String
+    let downloadType: DownloadType
+    let status: DownloadStatus
+    let progress: Double
+    let downloadedBytes: Int64
+    let totalBytes: Int64?
+    let filePath: String?
+}
+
+extension DownloadTask {
+    convenience init(snapshot: DownloadTaskSnapshot) {
+        self.init(id: snapshot.id, url: snapshot.url, fileName: snapshot.fileName, downloadType: snapshot.downloadType, status: snapshot.status)
+        progress = snapshot.progress
+        downloadedBytes = snapshot.downloadedBytes
+        totalBytes = snapshot.totalBytes
+        if let filePath = snapshot.filePath, !filePath.isEmpty {
+            self.filePath = URL(fileURLWithPath: filePath)
+        } else {
+            self.filePath = nil
+        }
+        downloadSpeed = 0.0
+    }
+    
+    func makeSnapshot() -> DownloadTaskSnapshot {
+        DownloadTaskSnapshot(
+            id: id,
+            url: url,
+            fileName: fileName,
+            downloadType: downloadType,
+            status: status,
+            progress: progress,
+            downloadedBytes: downloadedBytes,
+            totalBytes: totalBytes,
+            filePath: filePath?.path
+        )
     }
 }
 

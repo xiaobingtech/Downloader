@@ -15,6 +15,9 @@ class DownloadManager: NSObject, ObservableObject {
     @Published var downloadingTasks: [DownloadTask] = []
     @Published var completedTasks: [DownloadTask] = []
     
+    private let downloadingTasksKey = "downloadingTasks"
+    private let completedTasksKey = "completedTasks"
+    
     private var downloadSessions: [UUID: URLSessionDownloadTask] = [:]
     private var taskIdMap: [Int: UUID] = [:] // Map taskIdentifier to taskId
     private var m3u8Sessions: [UUID: Any] = [:]
@@ -30,7 +33,7 @@ class DownloadManager: NSObject, ObservableObject {
     
     private override init() {
         super.init()
-        loadCompletedTasks()
+        loadAllTasks()
     }
     
     // MARK: - Public Methods
@@ -40,6 +43,7 @@ class DownloadManager: NSObject, ObservableObject {
         let task = DownloadTask(url: url, fileName: fileName, downloadType: downloadType)
         
         downloadingTasks.append(task)
+        saveAllTasks()
         startDownload(task: task)
     }
     
@@ -54,6 +58,7 @@ class DownloadManager: NSObject, ObservableObject {
                 }
                 DispatchQueue.main.async {
                     task.status = .paused
+                    self?.saveAllTasks()
                 }
             }
             if let downloadTask = downloadSessions[taskId] {
@@ -76,6 +81,12 @@ class DownloadManager: NSObject, ObservableObject {
     }
     
     func deleteTask(taskId: UUID) {
+        // 删除文件
+        if let task = completedTasks.first(where: { $0.id == taskId }),
+           let filePath = task.filePath {
+            try? FileManager.default.removeItem(at: filePath)
+        }
+        
         downloadingTasks.removeAll { $0.id == taskId }
         completedTasks.removeAll { $0.id == taskId }
         
@@ -84,11 +95,7 @@ class DownloadManager: NSObject, ObservableObject {
         speedTimers[taskId]?.invalidate()
         speedTimers.removeValue(forKey: taskId)
         
-        // 删除文件
-        if let task = completedTasks.first(where: { $0.id == taskId }),
-           let filePath = task.filePath {
-            try? FileManager.default.removeItem(at: filePath)
-        }
+        saveAllTasks()
     }
     
     // MARK: - Private Methods
@@ -245,11 +252,12 @@ class DownloadManager: NSObject, ObservableObject {
                 self.lastUpdateTime.removeValue(forKey: task.id)
                 self.lastDownloadedBytes.removeValue(forKey: task.id)
                 
-                self.saveCompletedTasks()
+                self.saveAllTasks()
             }
         } catch {
             DispatchQueue.main.async {
                 task.status = .failed
+                self.saveAllTasks()
             }
         }
     }
@@ -279,7 +287,7 @@ class DownloadManager: NSObject, ObservableObject {
                 self.speedTimers[task.id]?.invalidate()
                 self.speedTimers.removeValue(forKey: task.id)
                 
-                self.saveCompletedTasks()
+                self.saveAllTasks()
             }
         } catch {
             // 如果复制失败，尝试直接使用原文件路径
@@ -295,27 +303,78 @@ class DownloadManager: NSObject, ObservableObject {
                 self.speedTimers[task.id]?.invalidate()
                 self.speedTimers.removeValue(forKey: task.id)
                 
-                self.saveCompletedTasks()
+                self.saveAllTasks()
             }
         }
     }
     
-    private func saveCompletedTasks() {
-        // 保存已完成的任务信息（简化版，实际应该使用更完善的持久化方案）
-        let taskData = completedTasks.map { task in
-            [
-                "id": task.id.uuidString,
-                "url": task.url,
-                "fileName": task.fileName,
-                "filePath": task.filePath?.path ?? ""
-            ]
+    private func saveAllTasks() {
+        // 保存所有任务（下载中和已完成的）
+        let encoder = JSONEncoder()
+        do {
+            let downloadingSnapshots = downloadingTasks.map { $0.makeSnapshot() }
+            let completedSnapshots = completedTasks.map { $0.makeSnapshot() }
+            
+            let downloadingData = try encoder.encode(downloadingSnapshots)
+            let completedData = try encoder.encode(completedSnapshots)
+            
+            UserDefaults.standard.set(downloadingData, forKey: downloadingTasksKey)
+            UserDefaults.standard.set(completedData, forKey: completedTasksKey)
+        } catch {
+            print("保存任务失败: \(error)")
         }
-        
-        UserDefaults.standard.set(taskData, forKey: "completedTasks")
     }
     
-    private func loadCompletedTasks() {
-        guard let taskData = UserDefaults.standard.array(forKey: "completedTasks") as? [[String: String]] else { return }
+    private func loadAllTasks() {
+        let decoder = JSONDecoder()
+        
+        // 加载下载中的任务
+        if let downloadingData = UserDefaults.standard.data(forKey: downloadingTasksKey) {
+            do {
+                let snapshots = try decoder.decode([DownloadTaskSnapshot].self, from: downloadingData)
+                downloadingTasks = snapshots.map { DownloadTask(snapshot: $0) }
+                
+                // 恢复暂停的任务状态，但不自动开始下载
+                for task in downloadingTasks {
+                    if task.status == .downloading {
+                        // 如果任务在下载中，恢复为暂停状态（因为应用重启后需要手动恢复）
+                        task.status = .paused
+                    }
+                }
+            } catch {
+                print("加载下载中任务失败: \(error)")
+            }
+        }
+        
+        // 加载已完成的任务
+        if let completedData = UserDefaults.standard.data(forKey: completedTasksKey) {
+            do {
+                let snapshots = try decoder.decode([DownloadTaskSnapshot].self, from: completedData)
+                completedTasks = snapshots.compactMap { snapshot in
+                    let task = DownloadTask(snapshot: snapshot)
+                    if let filePath = task.filePath {
+                        if FileManager.default.fileExists(atPath: filePath.path) {
+                            return task
+                        } else {
+                            return nil
+                        }
+                    }
+                    return nil
+                }
+            } catch {
+                print("加载已完成任务失败: \(error)")
+                // 如果新格式加载失败，尝试旧格式
+                loadCompletedTasksLegacy()
+            }
+        } else {
+            // 尝试加载旧格式
+            loadCompletedTasksLegacy()
+        }
+    }
+    
+    private func loadCompletedTasksLegacy() {
+        // 兼容旧版本的加载方式
+        guard let taskData = UserDefaults.standard.array(forKey: completedTasksKey) as? [[String: String]] else { return }
         
         completedTasks = taskData.compactMap { data in
             guard let idString = data["id"],
@@ -324,12 +383,20 @@ class DownloadManager: NSObject, ObservableObject {
                   let fileName = data["fileName"],
                   let filePathString = data["filePath"] else { return nil }
             
-            let task = DownloadTask(id: id, url: url, fileName: fileName, downloadType: .directLink, status: .completed)
-            task.filePath = URL(fileURLWithPath: filePathString)
+            let filePath = URL(fileURLWithPath: filePathString)
+            // 验证文件是否存在
+            guard FileManager.default.fileExists(atPath: filePath.path) else { return nil }
+            
+            let downloadType: DownloadType = url.lowercased().contains(".m3u8") ? .m3u8 : .directLink
+            let task = DownloadTask(id: id, url: url, fileName: fileName, downloadType: downloadType, status: .completed)
+            task.filePath = filePath
             task.progress = 1.0
             
             return task
         }
+        
+        // 保存为新格式
+        saveAllTasks()
     }
 }
 
@@ -377,6 +444,7 @@ extension DownloadManager: URLSessionDownloadDelegate {
             
             DispatchQueue.main.async {
                 downloadTaskModel.status = .failed
+                self.saveAllTasks()
             }
         }
         
