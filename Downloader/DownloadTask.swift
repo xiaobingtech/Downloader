@@ -17,6 +17,19 @@ enum DownloadStatus: String, Codable {
     case failed       // Download failed
 }
 
+/// Persistable data structure for DownloadTask
+struct DownloadTaskData: Codable {
+    let id: UUID
+    let urlString: String
+    let fileName: String
+    let createdAt: Date
+    var status: DownloadStatus
+    var progress: Double
+    var totalBytes: Int64
+    var downloadedBytes: Int64
+    var resumeDataPath: String?  // Path to saved resume data file
+}
+
 /// Model representing a download task
 class DownloadTask: Identifiable, ObservableObject {
     let id: UUID
@@ -44,6 +57,66 @@ class DownloadTask: Identifiable, ObservableObject {
         self.progress = 0.0
         self.totalBytes = 0
         self.downloadedBytes = 0
+    }
+    
+    // Init from persisted data
+    init(from data: DownloadTaskData) {
+        self.id = data.id
+        self.url = URL(string: data.urlString)!
+        self.fileName = data.fileName
+        self.createdAt = data.createdAt
+        self.status = data.status
+        self.progress = data.progress
+        self.totalBytes = data.totalBytes
+        self.downloadedBytes = data.downloadedBytes
+        
+        // Load resume data if exists
+        if let resumeDataPath = data.resumeDataPath {
+            let fileURL = DownloadTask.resumeDataDirectory.appendingPathComponent(resumeDataPath)
+            self.resumeData = try? Data(contentsOf: fileURL)
+        }
+    }
+    
+    /// Convert to persistable data
+    func toData() -> DownloadTaskData {
+        var resumeDataPath: String? = nil
+        
+        // Save resume data to file if exists
+        if let resumeData = self.resumeData {
+            let fileName = "\(id.uuidString).resumedata"
+            let fileURL = DownloadTask.resumeDataDirectory.appendingPathComponent(fileName)
+            try? resumeData.write(to: fileURL)
+            resumeDataPath = fileName
+        }
+        
+        return DownloadTaskData(
+            id: id,
+            urlString: url.absoluteString,
+            fileName: fileName,
+            createdAt: createdAt,
+            status: status,
+            progress: progress,
+            totalBytes: totalBytes,
+            downloadedBytes: downloadedBytes,
+            resumeDataPath: resumeDataPath
+        )
+    }
+    
+    /// Delete resume data file
+    func deleteResumeData() {
+        let fileName = "\(id.uuidString).resumedata"
+        let fileURL = DownloadTask.resumeDataDirectory.appendingPathComponent(fileName)
+        try? FileManager.default.removeItem(at: fileURL)
+    }
+    
+    /// Directory for storing resume data
+    static var resumeDataDirectory: URL {
+        let documentsPath = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
+        let resumeDir = documentsPath.appendingPathComponent("ResumeData")
+        if !FileManager.default.fileExists(atPath: resumeDir.path) {
+            try? FileManager.default.createDirectory(at: resumeDir, withIntermediateDirectories: true)
+        }
+        return resumeDir
     }
     
     /// Formatted progress percentage string

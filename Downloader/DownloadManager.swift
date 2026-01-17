@@ -21,12 +21,27 @@ class DownloadManager: NSObject, ObservableObject {
     // MARK: - Private Properties
     
     private lazy var urlSession: URLSession = {
-        let config = URLSessionConfiguration.default
+        let config = URLSessionConfiguration.background(withIdentifier: "com.downloader.background")
+        config.isDiscretionary = false
+        config.sessionSendsLaunchEvents = true
         return URLSession(configuration: config, delegate: self, delegateQueue: .main)
     }()
     
     /// Map task identifiers to DownloadTask objects
     private var taskMap: [Int: DownloadTask] = [:]
+    
+    /// Cancellables for observing task changes
+    private var cancellables = Set<AnyCancellable>()
+    
+    // MARK: - Persistence
+    
+    private static let downloadingTasksKey = "downloadingTasks"
+    private static let completedTasksKey = "completedTasks"
+    
+    private var tasksFileURL: URL {
+        let documentsPath = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
+        return documentsPath.appendingPathComponent("tasks.json")
+    }
     
     // MARK: - Singleton
     
@@ -34,6 +49,77 @@ class DownloadManager: NSObject, ObservableObject {
     
     private override init() {
         super.init()
+        loadTasks()
+        setupAutoSave()
+    }
+    
+    // MARK: - Persistence Methods
+    
+    /// Load tasks from persistent storage
+    private func loadTasks() {
+        guard FileManager.default.fileExists(atPath: tasksFileURL.path) else { return }
+        
+        do {
+            let data = try Data(contentsOf: tasksFileURL)
+            let decoder = JSONDecoder()
+            let savedData = try decoder.decode(SavedTasksData.self, from: data)
+            
+            // Restore downloading tasks
+            downloadingTasks = savedData.downloadingTasks.compactMap { taskData in
+                guard URL(string: taskData.urlString) != nil else { return nil }
+                return DownloadTask(from: taskData)
+            }
+            
+            // Restore completed tasks
+            completedTasks = savedData.completedTasks.compactMap { taskData in
+                guard URL(string: taskData.urlString) != nil else { return nil }
+                return DownloadTask(from: taskData)
+            }
+            
+            // Resume downloading tasks that were in progress
+            for task in downloadingTasks {
+                if task.status == .downloading || task.status == .waiting {
+                    task.status = .paused  // Mark as paused initially
+                }
+            }
+        } catch {
+            print("Failed to load tasks: \(error)")
+        }
+    }
+    
+    /// Save tasks to persistent storage
+    func saveTasks() {
+        let savedData = SavedTasksData(
+            downloadingTasks: downloadingTasks.map { $0.toData() },
+            completedTasks: completedTasks.map { $0.toData() }
+        )
+        
+        do {
+            let encoder = JSONEncoder()
+            encoder.outputFormatting = .prettyPrinted
+            let data = try encoder.encode(savedData)
+            try data.write(to: tasksFileURL)
+        } catch {
+            print("Failed to save tasks: \(error)")
+        }
+    }
+    
+    /// Setup auto-save when tasks change
+    private func setupAutoSave() {
+        // Debounce saves to avoid too frequent writes
+        $downloadingTasks
+            .debounce(for: .seconds(1), scheduler: DispatchQueue.main)
+            .sink { [weak self] _ in
+                self?.saveTasks()
+            }
+            .store(in: &cancellables)
+        
+        $completedTasks
+            .debounce(for: .seconds(1), scheduler: DispatchQueue.main)
+            .sink { [weak self] _ in
+                self?.saveTasks()
+            }
+            .store(in: &cancellables)
     }
     
     // MARK: - Public Methods
@@ -50,6 +136,7 @@ class DownloadManager: NSObject, ObservableObject {
         let task = DownloadTask(url: url)
         downloadingTasks.append(task)
         startDownload(task)
+        saveTasks()
         return task
     }
     
@@ -60,6 +147,7 @@ class DownloadManager: NSObject, ObservableObject {
             let downloadTask = urlSession.downloadTask(withResumeData: resumeData)
             task.downloadTask = downloadTask
             task.resumeData = nil
+            task.deleteResumeData()  // Clean up saved resume data file
             taskMap[downloadTask.taskIdentifier] = task
             downloadTask.resume()
         } else {
@@ -70,14 +158,16 @@ class DownloadManager: NSObject, ObservableObject {
             downloadTask.resume()
         }
         task.status = .downloading
+        saveTasks()
     }
     
     /// Pause a download task
     func pauseDownload(_ task: DownloadTask) {
-        task.downloadTask?.cancel(byProducingResumeData: { [weak task] data in
+        task.downloadTask?.cancel(byProducingResumeData: { [weak self, weak task] data in
             task?.resumeData = data
+            task?.status = .paused
+            self?.saveTasks()
         })
-        task.status = .paused
     }
     
     /// Resume a paused download task
@@ -89,10 +179,12 @@ class DownloadManager: NSObject, ObservableObject {
     func cancelDownload(_ task: DownloadTask) {
         task.downloadTask?.cancel()
         task.status = .failed
+        task.deleteResumeData()
         
         if let index = downloadingTasks.firstIndex(where: { $0.id == task.id }) {
             downloadingTasks.remove(at: index)
         }
+        saveTasks()
     }
     
     /// Delete a completed task
@@ -100,6 +192,7 @@ class DownloadManager: NSObject, ObservableObject {
         if let index = completedTasks.firstIndex(where: { $0.id == task.id }) {
             completedTasks.remove(at: index)
         }
+        saveTasks()
     }
     
     // MARK: - Private Methods
@@ -107,11 +200,13 @@ class DownloadManager: NSObject, ObservableObject {
     private func moveToCompleted(_ task: DownloadTask) {
         task.status = .completed
         task.progress = 1.0
+        task.deleteResumeData()
         
         if let index = downloadingTasks.firstIndex(where: { $0.id == task.id }) {
             downloadingTasks.remove(at: index)
         }
         completedTasks.insert(task, at: 0)
+        saveTasks()
     }
 }
 
@@ -124,7 +219,14 @@ extension DownloadManager: URLSessionDownloadDelegate {
         
         // Move file to documents directory
         let documentsPath = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
-        let destinationURL = documentsPath.appendingPathComponent(task.fileName)
+        let downloadsDir = documentsPath.appendingPathComponent("Downloads")
+        
+        // Create downloads directory if needed
+        if !FileManager.default.fileExists(atPath: downloadsDir.path) {
+            try? FileManager.default.createDirectory(at: downloadsDir, withIntermediateDirectories: true)
+        }
+        
+        let destinationURL = downloadsDir.appendingPathComponent(task.fileName)
         
         do {
             // Remove existing file if exists
@@ -136,6 +238,7 @@ extension DownloadManager: URLSessionDownloadDelegate {
         } catch {
             task.status = .failed
             task.errorMessage = error.localizedDescription
+            saveTasks()
         }
         
         taskMap.removeValue(forKey: downloadTask.taskIdentifier)
@@ -164,6 +267,20 @@ extension DownloadManager: URLSessionDownloadDelegate {
             }
             dlTask.status = .failed
             dlTask.errorMessage = error.localizedDescription
+            saveTasks()
         }
     }
+    
+    // Handle background session events
+    func urlSessionDidFinishEvents(forBackgroundURLSession session: URLSession) {
+        // App was relaunched due to background download completion
+        saveTasks()
+    }
+}
+
+// MARK: - Persistence Data Structure
+
+private struct SavedTasksData: Codable {
+    let downloadingTasks: [DownloadTaskData]
+    let completedTasks: [DownloadTaskData]
 }
