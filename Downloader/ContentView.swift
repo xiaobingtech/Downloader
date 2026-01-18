@@ -10,6 +10,7 @@ import SwiftUI
 /// Main content view with segmented control and download lists
 struct ContentView: View {
     @StateObject private var manager = DownloadManager.shared
+    @StateObject private var m3u8Manager = M3U8DownloadManager.shared
     
     @State private var selectedTab: Int = 0
     @State private var showNewTaskSheet: Bool = false
@@ -40,17 +41,27 @@ struct ContentView: View {
                 addButton
             }
             .sheet(isPresented: $showNewTaskSheet) {
-                NewTaskSheet(manager: manager)
+                NewTaskSheet(manager: manager, m3u8Manager: m3u8Manager)
             }
         }
     }
     
     // MARK: - Private Views
     
+    /// Check if downloading list is empty
+    private var isDownloadingEmpty: Bool {
+        manager.downloadingTasks.isEmpty && m3u8Manager.downloadingTasks.isEmpty
+    }
+    
+    /// Check if completed list is empty
+    private var isCompletedEmpty: Bool {
+        manager.completedTasks.isEmpty && m3u8Manager.completedTasks.isEmpty
+    }
+    
     /// List of downloading/paused tasks
     private var downloadingList: some View {
         Group {
-            if manager.downloadingTasks.isEmpty {
+            if isDownloadingEmpty {
                 emptyStateView(
                     icon: "arrow.down.circle",
                     title: "暂无下载任务",
@@ -59,6 +70,12 @@ struct ContentView: View {
             } else {
                 ScrollView {
                     LazyVStack(spacing: 8) {
+                        // M3U8 tasks
+                        ForEach(m3u8Manager.downloadingTasks) { task in
+                            M3U8TaskRow(task: task, manager: m3u8Manager)
+                        }
+                        
+                        // Normal tasks
                         ForEach(manager.downloadingTasks) { task in
                             DownloadTaskRow(task: task, manager: manager)
                         }
@@ -73,7 +90,7 @@ struct ContentView: View {
     /// List of completed tasks
     private var completedList: some View {
         Group {
-            if manager.completedTasks.isEmpty {
+            if isCompletedEmpty {
                 emptyStateView(
                     icon: "checkmark.circle",
                     title: "暂无已完成任务",
@@ -82,6 +99,12 @@ struct ContentView: View {
             } else {
                 ScrollView {
                     LazyVStack(spacing: 8) {
+                        // M3U8 completed tasks
+                        ForEach(m3u8Manager.completedTasks) { task in
+                            completedM3U8TaskRow(task)
+                        }
+                        
+                        // Normal completed tasks
                         ForEach(manager.completedTasks) { task in
                             completedTaskRow(task)
                         }
@@ -93,7 +116,7 @@ struct ContentView: View {
         }
     }
     
-    /// Row for completed task with delete action
+    /// Row for completed normal task
     private func completedTaskRow(_ task: DownloadTask) -> some View {
         HStack(spacing: 12) {
             Image(systemName: "doc.fill")
@@ -114,6 +137,40 @@ struct ContentView: View {
             
             Button {
                 manager.deleteCompletedTask(task)
+            } label: {
+                Image(systemName: "trash")
+                    .font(.body)
+                    .foregroundStyle(.red)
+            }
+            .buttonStyle(.plain)
+        }
+        .padding(.horizontal, 16)
+        .frame(height: 56)
+        .background(Color(.systemBackground))
+        .clipShape(RoundedRectangle(cornerRadius: 8))
+    }
+    
+    /// Row for completed M3U8 task
+    private func completedM3U8TaskRow(_ task: M3U8DownloadTask) -> some View {
+        HStack(spacing: 12) {
+            Image(systemName: "film.fill")
+                .font(.title2)
+                .foregroundStyle(.purple)
+            
+            VStack(alignment: .leading, spacing: 2) {
+                Text(task.fileName + ".mp4")
+                    .font(.body)
+                    .lineLimit(1)
+                
+                Text("已完成")
+                    .font(.caption)
+                    .foregroundStyle(.green)
+            }
+            
+            Spacer()
+            
+            Button {
+                m3u8Manager.deleteCompletedTask(task)
             } label: {
                 Image(systemName: "trash")
                     .font(.body)
