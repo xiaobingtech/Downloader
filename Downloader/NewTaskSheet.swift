@@ -47,7 +47,7 @@ struct NewTaskSheet: View {
                         .textFieldStyle(.plain)
                         .padding(.horizontal, 12)
                         .padding(.vertical, 12)
-                        .background(Color(.secondarySystemBackground))
+                        .background(Color(.systemGray5))
                         .clipShape(RoundedRectangle(cornerRadius: 8))
                         .autocorrectionDisabled()
                         .textInputAutocapitalization(.never)
