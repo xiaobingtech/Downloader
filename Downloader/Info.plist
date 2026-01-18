@@ -7,11 +7,11 @@
 		<key>NSAllowsArbitraryLoads</key>
 		<true/>
 	</dict>
-    <!-- 允许App的Documents目录在文件App中显示 -->
-    <key>UIFileSharingEnabled</key>
-    <true/>
-    <!-- 支持在文件App中原位打开文件（无需复制），iOS 11+推荐添加 -->
-    <key>LSSupportsOpeningDocumentsInPlace</key>
-    <true/>
+	<key>UIFileSharingEnabled</key>
+	<true/>
+	<key>LSSupportsOpeningDocumentsInPlace</key>
+	<true/>
+	<key>NSCameraUsageDescription</key>
+	<string>AppStoreConnect</string>
 </dict>
 </plist>
