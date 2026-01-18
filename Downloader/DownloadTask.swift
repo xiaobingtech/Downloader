@@ -48,10 +48,17 @@ class DownloadTask: Identifiable, ObservableObject {
     // Resume data for paused downloads
     var resumeData: Data?
     
-    init(url: URL) {
+    init(url: URL, fileName: String? = nil) {
         self.id = UUID()
         self.url = url
-        self.fileName = url.lastPathComponent.isEmpty ? "Unknown" : url.lastPathComponent
+        
+        if let name = fileName, !name.isEmpty {
+            self.fileName = name
+        } else {
+            let lastPath = url.lastPathComponent
+            self.fileName = lastPath.isEmpty ? "Unknown" : lastPath
+        }
+        
         self.createdAt = Date()
         self.status = .waiting
         self.progress = 0.0

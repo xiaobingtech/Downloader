@@ -126,14 +126,15 @@ class DownloadManager: NSObject, ObservableObject {
     
     /// Add a new download task
     /// - Parameter urlString: URL string to download
+    /// - Parameter fileName: Optional custom file name
     /// - Returns: Created DownloadTask or nil if URL is invalid
     @discardableResult
-    func addTask(urlString: String) -> DownloadTask? {
+    func addTask(urlString: String, fileName: String? = nil) -> DownloadTask? {
         guard let url = URL(string: urlString), url.scheme != nil else {
             return nil
         }
         
-        let task = DownloadTask(url: url)
+        let task = DownloadTask(url: url, fileName: fileName)
         downloadingTasks.append(task)
         startDownload(task)
         saveTasks()

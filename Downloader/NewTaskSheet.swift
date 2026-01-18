@@ -20,18 +20,13 @@ struct NewTaskSheet: View {
     
     /// Check if URL is m3u8
     private var isM3U8URL: Bool {
-        urlText.lowercased().contains(".m3u8")
+        guard let url = VideoParser.shared.extractURL(from: urlText) else { return false }
+        return url.absoluteString.lowercased().contains(".m3u8")
     }
     
     /// Check if input is valid (non-empty and valid URL)
     private var isValidInput: Bool {
-        guard !urlText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
-            return false
-        }
-        guard let url = URL(string: urlText), url.scheme != nil else {
-            return false
-        }
-        return true
+        return VideoParser.shared.extractURL(from: urlText) != nil
     }
     
     var body: some View {
@@ -120,39 +115,66 @@ struct NewTaskSheet: View {
     
     // MARK: - Private Methods
     
+    // MARK: - Private Methods
+    
     private func createDownloadTask() {
-        let trimmedURL = urlText.trimmingCharacters(in: .whitespacesAndNewlines)
-        
-        guard let _ = URL(string: trimmedURL), trimmedURL.hasPrefix("http") else {
+        // 1. Extract URL from text (handles both clean URL and "text + URL" format)
+        guard let url = VideoParser.shared.extractURL(from: urlText) else {
             showError = true
-            errorMessage = "请输入有效的下载链接"
+            errorMessage = "无法从输入中提取有效的下载链接"
             return
         }
         
         showError = false
+        isLoading = true
         
-        if isM3U8URL {
-            // M3U8 download
-            isLoading = true
-            Task {
-                let task = await m3u8Manager.addTask(urlString: trimmedURL)
-                await MainActor.run {
-                    isLoading = false
-                    if task != nil {
-                        dismiss()
-                    } else {
-                        showError = true
-                        errorMessage = "解析M3U8文件失败"
+        Task {
+            do {
+                // 2. Parse URL (handles Douyin redirects and API calls)
+                let finalURL = try await VideoParser.shared.parse(url: url)
+                let finalURLString = finalURL.absoluteString
+                
+                // 3. Check if it's M3U8
+                if finalURLString.lowercased().contains(".m3u8") {
+                    let task = await m3u8Manager.addTask(urlString: finalURLString)
+                    await MainActor.run {
+                        isLoading = false
+                        if task != nil {
+                            dismiss()
+                        } else {
+                            showError = true
+                            errorMessage = "解析M3U8文件失败"
+                        }
+                    }
+                } else {
+                    // 4. Normal download
+                    await MainActor.run {
+                        // Generate a filename if it's a parsed Douyin video (which usually has /play/ path)
+                        // or if we just want to ensure unique naming for these.
+                        // Since VideoParser parses to a direct video link, we might want to give it a proper name.
+                        var customName: String? = nil
+                        if finalURL.host?.contains("iesdouyin.com") == true {
+                             let formatter = DateFormatter()
+                             formatter.dateFormat = "yyyyMMdd_HHmmss"
+                             customName = "Video_\(formatter.string(from: Date())).mp4"
+                        }
+                        
+                        if manager.addTask(urlString: finalURLString, fileName: customName) != nil {
+                            isLoading = false
+                            dismiss()
+                        } else {
+                            isLoading = false
+                            showError = true
+                            errorMessage = "创建下载任务失败"
+                        }
                     }
                 }
-            }
-        } else {
-            // Normal download
-            if manager.addTask(urlString: trimmedURL) != nil {
-                dismiss()
-            } else {
-                showError = true
-                errorMessage = "创建下载任务失败"
+            } catch {
+                await MainActor.run {
+                    isLoading = false
+                    showError = true
+                    errorMessage = "解析失败: \(error.localizedDescription)"
+                }
             }
         }
     }
