@@ -17,6 +17,10 @@ struct ContentView: View {
     @State private var showNewTaskSheet: Bool = false
     @State private var previewURL: URL?
     
+    @State private var showingDeleteConfirmation = false
+    @State private var taskToDelete: DownloadTask?
+    @State private var m3u8TaskToDelete: M3U8DownloadTask?
+    
     var body: some View {
         NavigationStack {
             VStack(spacing: 0) {
@@ -45,8 +49,40 @@ struct ContentView: View {
             .sheet(isPresented: $showNewTaskSheet) {
                 NewTaskSheet(manager: manager, m3u8Manager: m3u8Manager)
             }
+            .confirmationDialog("删除任务", isPresented: $showingDeleteConfirmation, titleVisibility: .visible) {
+                 Button("删除任务和文件", role: .destructive) {
+                     if let task = taskToDelete {
+                         manager.deleteCompletedTask(task, deleteFile: true)
+                     }
+                     if let task = m3u8TaskToDelete {
+                         m3u8Manager.deleteCompletedTask(task, deleteFile: true)
+                     }
+                     clearDeleteState()
+                 }
+                 
+                 Button("仅删除任务") {
+                     if let task = taskToDelete {
+                         manager.deleteCompletedTask(task, deleteFile: false)
+                     }
+                     if let task = m3u8TaskToDelete {
+                         m3u8Manager.deleteCompletedTask(task, deleteFile: false)
+                     }
+                     clearDeleteState()
+                 }
+                 
+                 Button("取消", role: .cancel) {
+                     clearDeleteState()
+                 }
+            } message: {
+                Text("您确定要删除此任务吗？此操作无法撤销。")
+            }
         }
         .quickLookPreview($previewURL)
+    }
+    
+    private func clearDeleteState() {
+        taskToDelete = nil
+        m3u8TaskToDelete = nil
     }
     
     // MARK: - Private Views
@@ -121,13 +157,8 @@ struct ContentView: View {
     
     /// Row for completed normal task
     private func completedTaskRow(_ task: DownloadTask) -> some View {
-        ZStack {
-            Color(.systemBackground)
-                .contentShape(Rectangle())
-                .onTapGesture {
-                    previewURL = task.destinationURL
-                }
-            
+        HStack(spacing: 12) {
+            // Content area (Tappable for preview)
             HStack(spacing: 12) {
                 Image(systemName: "doc.fill")
                     .font(.title2)
@@ -138,31 +169,35 @@ struct ContentView: View {
                     .lineLimit(1)
                 
                 Spacer()
-                
-                Button {
-                    manager.deleteCompletedTask(task)
-                } label: {
-                    Image(systemName: "trash")
-                        .font(.body)
-                        .foregroundStyle(.red)
-                }
-                .buttonStyle(.plain)
             }
-            .padding(.horizontal, 16)
+            .contentShape(Rectangle())
+            .onTapGesture {
+                previewURL = task.destinationURL
+            }
+            
+            // Delete button (Separate)
+            Button {
+                taskToDelete = task
+                showingDeleteConfirmation = true
+            } label: {
+                Image(systemName: "trash")
+                    .font(.body)
+                    .foregroundStyle(.red)
+                    .padding(8)
+                    .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
         }
+        .padding(.horizontal, 16)
         .frame(height: 56)
+        .background(Color(.systemBackground))
         .clipShape(RoundedRectangle(cornerRadius: 8))
     }
     
     /// Row for completed M3U8 task
     private func completedM3U8TaskRow(_ task: M3U8DownloadTask) -> some View {
-        ZStack {
-            Color(.systemBackground)
-                .contentShape(Rectangle())
-                .onTapGesture {
-                    previewURL = task.mp4Path
-                }
-            
+        HStack(spacing: 12) {
+            // Content area (Tappable for preview)
             HStack(spacing: 12) {
                 Image(systemName: "film.fill")
                     .font(.title2)
@@ -173,19 +208,28 @@ struct ContentView: View {
                     .lineLimit(1)
                 
                 Spacer()
-                
-                Button {
-                    m3u8Manager.deleteCompletedTask(task)
-                } label: {
-                    Image(systemName: "trash")
-                        .font(.body)
-                        .foregroundStyle(.red)
-                }
-                .buttonStyle(.plain)
             }
-            .padding(.horizontal, 16)
+            .contentShape(Rectangle())
+            .onTapGesture {
+                previewURL = task.mp4Path
+            }
+            
+            // Delete button (Separate)
+            Button {
+                m3u8TaskToDelete = task
+                showingDeleteConfirmation = true
+            } label: {
+                Image(systemName: "trash")
+                    .font(.body)
+                    .foregroundStyle(.red)
+                    .padding(8)
+                    .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
         }
+        .padding(.horizontal, 16)
         .frame(height: 56)
+        .background(Color(.systemBackground))
         .clipShape(RoundedRectangle(cornerRadius: 8))
     }
     

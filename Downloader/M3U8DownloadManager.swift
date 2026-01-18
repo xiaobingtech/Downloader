@@ -179,10 +179,18 @@ class M3U8DownloadManager: NSObject, ObservableObject {
     }
     
     /// Delete a completed task
-    func deleteCompletedTask(_ task: M3U8DownloadTask) {
+    /// - Parameters:
+    ///   - task: The task to delete
+    ///   - deleteFile: Whether to delete the local file as well
+    func deleteCompletedTask(_ task: M3U8DownloadTask, deleteFile: Bool = false) {
         if let index = completedTasks.firstIndex(where: { $0.id == task.id }) {
             completedTasks.remove(at: index)
         }
+        
+        if deleteFile {
+            try? FileManager.default.removeItem(at: task.mp4Path)
+        }
+        
         saveTasks()
     }
     

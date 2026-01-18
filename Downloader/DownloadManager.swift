@@ -189,10 +189,18 @@ class DownloadManager: NSObject, ObservableObject {
     }
     
     /// Delete a completed task
-    func deleteCompletedTask(_ task: DownloadTask) {
+    /// - Parameters:
+    ///   - task: The task to delete
+    ///   - deleteFile: Whether to delete the local file as well
+    func deleteCompletedTask(_ task: DownloadTask, deleteFile: Bool = false) {
         if let index = completedTasks.firstIndex(where: { $0.id == task.id }) {
             completedTasks.remove(at: index)
         }
+        
+        if deleteFile {
+            try? FileManager.default.removeItem(at: task.destinationURL)
+        }
+        
         saveTasks()
     }
     
