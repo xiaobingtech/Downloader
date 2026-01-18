@@ -123,15 +123,15 @@ struct ContentView: View {
                 .font(.title2)
                 .foregroundStyle(.blue)
             
-            VStack(alignment: .leading, spacing: 2) {
+//            VStack(alignment: .leading, spacing: 2) {
                 Text(task.fileName)
                     .font(.body)
                     .lineLimit(1)
                 
-                Text(task.sizeText)
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-            }
+//                Text(task.sizeText)
+//                    .font(.caption)
+//                    .foregroundStyle(.secondary)
+//            }
             
             Spacer()
             
@@ -157,15 +157,15 @@ struct ContentView: View {
                 .font(.title2)
                 .foregroundStyle(.purple)
             
-            VStack(alignment: .leading, spacing: 2) {
+//            VStack(alignment: .leading, spacing: 2) {
                 Text(task.fileName + ".mp4")
                     .font(.body)
                     .lineLimit(1)
                 
-                Text("已完成")
-                    .font(.caption)
-                    .foregroundStyle(.green)
-            }
+//                Text("已完成")
+//                    .font(.caption)
+//                    .foregroundStyle(.green)
+//            }
             
             Spacer()
             

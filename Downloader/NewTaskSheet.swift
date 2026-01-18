@@ -13,7 +13,7 @@ struct NewTaskSheet: View {
     @ObservedObject var manager: DownloadManager
     @ObservedObject var m3u8Manager: M3U8DownloadManager
     
-    @State private var urlText: String = "https://upyun.luckly-mjw.cn/Assets/media-source/example/media/index.m3u8"
+    @State private var urlText: String = ""
     @State private var showError: Bool = false
     @State private var errorMessage: String = ""
     @State private var isLoading: Bool = false
