@@ -133,4 +133,10 @@ class DownloadTask: Identifiable, ObservableObject {
         let total = formatter.string(fromByteCount: totalBytes)
         return "\(downloaded) / \(total)"
     }
+    
+    /// Path to downloaded file
+    var destinationURL: URL {
+        let documentsPath = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
+        return documentsPath.appendingPathComponent("Downloads").appendingPathComponent(fileName)
+    }
 }

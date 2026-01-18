@@ -6,6 +6,7 @@
 //
 
 import SwiftUI
+import QuickLook
 
 /// Main content view with segmented control and download lists
 struct ContentView: View {
@@ -14,6 +15,7 @@ struct ContentView: View {
     
     @State private var selectedTab: Int = 0
     @State private var showNewTaskSheet: Bool = false
+    @State private var previewURL: URL?
     
     var body: some View {
         NavigationStack {
@@ -44,6 +46,7 @@ struct ContentView: View {
                 NewTaskSheet(manager: manager, m3u8Manager: m3u8Manager)
             }
         }
+        .quickLookPreview($previewURL)
     }
     
     // MARK: - Private Views
@@ -118,69 +121,71 @@ struct ContentView: View {
     
     /// Row for completed normal task
     private func completedTaskRow(_ task: DownloadTask) -> some View {
-        HStack(spacing: 12) {
-            Image(systemName: "doc.fill")
-                .font(.title2)
-                .foregroundStyle(.blue)
+        ZStack {
+            Color(.systemBackground)
+                .contentShape(Rectangle())
+                .onTapGesture {
+                    previewURL = task.destinationURL
+                }
             
-//            VStack(alignment: .leading, spacing: 2) {
+            HStack(spacing: 12) {
+                Image(systemName: "doc.fill")
+                    .font(.title2)
+                    .foregroundStyle(.blue)
+                
                 Text(task.fileName)
                     .font(.body)
                     .lineLimit(1)
                 
-//                Text(task.sizeText)
-//                    .font(.caption)
-//                    .foregroundStyle(.secondary)
-//            }
-            
-            Spacer()
-            
-            Button {
-                manager.deleteCompletedTask(task)
-            } label: {
-                Image(systemName: "trash")
-                    .font(.body)
-                    .foregroundStyle(.red)
+                Spacer()
+                
+                Button {
+                    manager.deleteCompletedTask(task)
+                } label: {
+                    Image(systemName: "trash")
+                        .font(.body)
+                        .foregroundStyle(.red)
+                }
+                .buttonStyle(.plain)
             }
-            .buttonStyle(.plain)
+            .padding(.horizontal, 16)
         }
-        .padding(.horizontal, 16)
         .frame(height: 56)
-        .background(Color(.systemBackground))
         .clipShape(RoundedRectangle(cornerRadius: 8))
     }
     
     /// Row for completed M3U8 task
     private func completedM3U8TaskRow(_ task: M3U8DownloadTask) -> some View {
-        HStack(spacing: 12) {
-            Image(systemName: "film.fill")
-                .font(.title2)
-                .foregroundStyle(.purple)
+        ZStack {
+            Color(.systemBackground)
+                .contentShape(Rectangle())
+                .onTapGesture {
+                    previewURL = task.mp4Path
+                }
             
-//            VStack(alignment: .leading, spacing: 2) {
+            HStack(spacing: 12) {
+                Image(systemName: "film.fill")
+                    .font(.title2)
+                    .foregroundStyle(.purple)
+                
                 Text(task.fileName + ".mp4")
                     .font(.body)
                     .lineLimit(1)
                 
-//                Text("已完成")
-//                    .font(.caption)
-//                    .foregroundStyle(.green)
-//            }
-            
-            Spacer()
-            
-            Button {
-                m3u8Manager.deleteCompletedTask(task)
-            } label: {
-                Image(systemName: "trash")
-                    .font(.body)
-                    .foregroundStyle(.red)
+                Spacer()
+                
+                Button {
+                    m3u8Manager.deleteCompletedTask(task)
+                } label: {
+                    Image(systemName: "trash")
+                        .font(.body)
+                        .foregroundStyle(.red)
+                }
+                .buttonStyle(.plain)
             }
-            .buttonStyle(.plain)
+            .padding(.horizontal, 16)
         }
-        .padding(.horizontal, 16)
         .frame(height: 56)
-        .background(Color(.systemBackground))
         .clipShape(RoundedRectangle(cornerRadius: 8))
     }
     
